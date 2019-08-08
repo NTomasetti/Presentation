@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+  <head>
+    <title>Kaggle: Predict Future Sales</title>
+    <meta charset="utf-8" />
+    <meta name="author" content="Nathaniel Tomasetti" />
+    <meta name="date" content="2019-08-12" />
+    <link href="libs/remark-css-0.0.1/default.css" rel="stylesheet" />
+    <link href="libs/remark-css-0.0.1/default-fonts.css" rel="stylesheet" />
+    <script src="libs/htmlwidgets-1.3/htmlwidgets.js"></script>
+    <script src="libs/plotly-binding-4.9.0/plotly.js"></script>
+    <script src="libs/typedarray-0.1/typedarray.min.js"></script>
+    <script src="libs/jquery-1.11.3/jquery.min.js"></script>
+    <link href="libs/crosstalk-1.0.0/css/crosstalk.css" rel="stylesheet" />
+    <script src="libs/crosstalk-1.0.0/js/crosstalk.min.js"></script>
+    <link href="libs/plotly-htmlwidgets-css-1.46.1/plotly-htmlwidgets.css" rel="stylesheet" />
+    <script src="libs/plotly-main-1.46.1/plotly-latest.min.js"></script>
+  </head>
+  <body>
+    <textarea id="source">
+class: center, middle, inverse, title-slide
+
+# Kaggle: Predict Future Sales
+## then Optimise Prices
+### Nathaniel Tomasetti
+### August 12, 2019
+
+---
+
+
+
+
+### Aim
+
+Find the prices of 22,000 products to maximise October 2015 profits.
+
+--
+
+### Task One
+
+Forecast *future sales* as a function of *prices*
+
+--
+
+### Task Two
+
+Find the *price* of each item that maximises
+`$$Profit = Sales(Price) \times \big(Price - Cost\big)$$`
+
+---
+
+class: center, inverse, middle
+
+# The Data
+
+---
+
+### Total Sales
+
+.center[
+![](ColesPresentation_files/figure-html/unnamed-chunk-2-1.png)&lt;!-- --&gt;
+]
+
+* 34 Months of Data 
+
+* Spike around Christmas each year
+
+---
+
+### Items and Categories
+
+- 21,807 total products
+
+- 478 are *new* for October 2015
+
+- 84 pre-defined product categories
+
+--
+
+- Create 15 new *broader* categories
+
+
+
+
+```r
+mutate(items, cat2 = unlist(strsplit(cat1, ' '))[1]) %&gt;% head()
+```
+
+```
+## # A tibble: 6 x 4
+##   item_name              item_id cat1            cat2 
+##   &lt;chr&gt;                    &lt;dbl&gt; &lt;chr&gt;           &lt;chr&gt;
+## 1 ! ВО ВЛАСТИ НАВАЖДЕН         0 Кино - DVD      Кино 
+## 2 !ABBYY FineReader 12         1 Программы - Для Кино 
+## 3 ***В ЛУЧАХ СЛАВЫ   (         2 Кино - DVD      Кино 
+## 4 ***ГОЛУБАЯ ВОЛНА  (U         3 Кино - DVD      Кино 
+## 5 "***КОРОБКА (СТЕКЛО) "       4 Кино - DVD      Кино 
+## 6 ***НОВЫЕ АМЕРИКАНСКИ         5 Кино - DVD      Кино
+```
+
+---
+
+### Daily Sales Data
+
+- 2,935,849 observations for number of times items sold per *shop* each *day*.
+
+- Runs from January 1 2013 to October 31 2015.
+
+
+```
+## # A tibble: 6 x 6
+##   date       date_block_num shop_id item_id item_price item_cnt_day
+##   &lt;date&gt;              &lt;dbl&gt;   &lt;dbl&gt;   &lt;dbl&gt;      &lt;dbl&gt;        &lt;dbl&gt;
+## 1 2013-01-02              0      59   22154       999             1
+## 2 2013-01-03              0      25    2552       899             1
+## 3 2013-01-05              0      25    2552       899            -1
+## 4 2013-01-06              0      25    2554      1709.            1
+## 5 2013-01-15              0      25    2555      1099             1
+## 6 2013-01-10              0      25    2564       349             1
+```
+
+--
+
+- 0.2% of rows indicate *negative* sales
+
+- 90% of rows indicate *one* sale
+
+- 94% of item / shop / day combinations are not recorded: No sales occured.
+
+---
+
+### Data is aggregated to total sales per month
+
+
+.center[
+![](ColesPresentation_files/figure-html/unnamed-chunk-6-1.png)&lt;!-- --&gt;
+]
+
+Technology company - few items see sales for long periods.
+
+
+---
+
+class: center, inverse, middle
+
+# Modelling
+
+---
+
+### Modelling Constraints
+
+Goal is to maximise `$$Profit = Sales(Price) \times \big(Price - Cost\big)$$`
+
+* Need to differentiate `\(\frac{\partial Sales(Price)}{\partial Price}\)`
+
+--
+
+* Powerful predictive models like Random Forests are not differentiable
+
+* Neural Networks suffer from vanishing gradients with more layers
+
+* Hierarchical models are slow to fit
+
+* Need to do this on a per-product basis
+
+--
+
+#### Use Poisson Regression for each previously seen product
+
+* Use more regressors for series with more data
+
+--
+
+#### Use Poisson Regression for each category to forecast new products
+
+* Averaging the sales and prices of items in the category
+
+---
+
+### The loss function for forecasts
+
+#### If too many products are ordered:
+
+* Forecasts `\(\hat{y}\)` are greater than sales `\(y\)`.
+
+* Spent `\(Cost \times (\hat{y} - y)\)` on unsold products
+
+--
+
+#### If not enough products are ordered
+
+* Forecasts `\(\hat{y}\)` are less than sales `\(y\)`.
+
+* `\((Price - Cost) \times (y - \hat{y})\)` potential profit lost.
+
+--
+
+####Put it together,
+
+`$$Loss = Cost \times (\hat{y} - y) + Price \times (y - \hat{y}) \times I(\hat{y} &lt; y)$$`
+with 
+
+`$$\hat{y} = \exp\{X^{\prime}\beta\}$$`
+
+--
+
+Penalises over or under prediction asymmetrically
+
+---
+
+### After estimating a forecast model
+
+####Find the optimal price,
+
+`$$\mbox{Optimal Price} = \arg \max_{\mbox{Price}} \mbox{S(Price)} \times \big(\mbox{Price} - \mbox{Cost}\big)$$`
+
+--
+
+####Forecast Sales
+
+`$$\mbox{Predicted Sales} = S(\mbox{Optimal Price})$$`
+
+--
+
+####Buy some products, spending
+
+`$$\mbox{Total Cost} = \mbox{Cost} \times \mbox{Predicted Sales}$$`
+
+####Sell them, earning
+
+`$$\mbox{Profit} = \mbox{Optimal Price} \times \min \left(\mbox{Predicted Sales, Actual Sales}\right) - \mbox{Total Costs}$$`
+
+---
+
+
+### Types of Products
+
+12,592 products have not been sold in at least six months
+
+* The best forecast for these is `\(Sales_{Oct 2015} = 0\)`.
+
+* 203 of these (1.6%) actually sold something in October 2015
+
+--
+
+The remaining products are split into different types
+
+```
+##        priceType
+## Obs     changing constant
+##   0-4        601     1038
+##   5-12      2945      521
+##   13-24     1851       86
+##   25+       1673       22
+```
+
+* Use a different strategy for each type
+
+---
+
+### Some Time Series
+
+.center[
+![](ColesPresentation_files/figure-html/unnamed-chunk-8-1.png)&lt;!-- --&gt;
+]
+
+---
+
+### What would you predict for October?
+
+.center[
+<div id="htmlwidget-70f9b5b75b0cce96ea35" style="width:576px;height:504px;" class="plotly html-widget"></div>
+<script type="application/json" data-for="htmlwidget-70f9b5b75b0cce96ea35">{"x":{"visdat":{"de476a48236":["function () ","plotlyVisDat"]},"cur_data":"de476a48236","attrs":{"de476a48236":{"x":{},"y":{},"mode":"lines","frame":{},"alpha_stroke":1,"sizes":[10,100],"spans":[1,20],"type":"scatter"}},"layout":{"margin":{"b":40,"l":60,"t":25,"r":10},"title":"Билеты (Цифра)","xaxis":{"domain":[0,1],"automargin":true,"title":"Date","zeroline":false,"range":["2015-05-01","2015-10-31"]},"yaxis":{"domain":[0,1],"automargin":true,"title":"Sales","zeroline":false,"range":[0,10000]},"hovermode":"closest","showlegend":false,"sliders":[],"updatemenus":[{"type":"buttons","direction":"right","showactive":false,"y":0,"x":1,"yanchor":"bottom","xanchor":"right","pad":{"t":60,"r":5},"buttons":[{"label":"Play","method":"animate","args":[null,{"fromcurrent":true,"mode":"immediate","transition":{"duration":10,"easing":"linear"},"frame":{"duration":100,"redraw":false}}]}]}]},"source":"A","config":{"showSendToCloud":false},"data":[{"x":["2015-05-01","2015-06-01","2015-07-01","2015-08-01","2015-09-01"],"y":[147,117,193,483,5129],"mode":"lines","frame":"1","type":"scatter","marker":{"color":"rgba(31,119,180,1)","line":{"color":"rgba(31,119,180,1)"}},"error_y":{"color":"rgba(31,119,180,1)"},"error_x":{"color":"rgba(31,119,180,1)"},"line":{"color":"rgba(31,119,180,1)"},"xaxis":"x","yaxis":"y","visible":true}],"highlight":{"on":"plotly_click","persistent":false,"dynamic":false,"selectize":false,"opacityDim":0.2,"selected":{"opacity":1},"debounce":0},"frames":[{"name":"1","data":[{"x":["2015-05-01","2015-06-01","2015-07-01","2015-08-01","2015-09-01"],"y":[147,117,193,483,5129],"mode":"lines","frame":"1","type":"scatter","marker":{"color":"rgba(31,119,180,1)","line":{"color":"rgba(31,119,180,1)"}},"error_y":{"color":"rgba(31,119,180,1)"},"error_x":{"color":"rgba(31,119,180,1)"},"line":{"color":"rgba(31,119,180,1)"},"xaxis":"x","yaxis":"y","visible":true}],"traces":[0]},{"name":"2","data":[{"x":["2015-05-01","2015-06-01","2015-07-01","2015-08-01","2015-09-01","2015-10-01"],"y":[147,117,193,483,5129,0],"mode":"lines","frame":"2","type":"scatter","marker":{"color":"rgba(31,119,180,1)","line":{"color":"rgba(31,119,180,1)"}},"error_y":{"color":"rgba(31,119,180,1)"},"error_x":{"color":"rgba(31,119,180,1)"},"line":{"color":"rgba(31,119,180,1)"},"xaxis":"x","yaxis":"y","visible":true}],"traces":[0]}],"shinyEvents":["plotly_hover","plotly_click","plotly_selected","plotly_relayout","plotly_brushed","plotly_brushing","plotly_clickannotation","plotly_doubleclick","plotly_deselect","plotly_afterplot"],"base_url":"https://plot.ly"},"evals":[],"jsHooks":[]}</script>
+]
+
+
+---
+
+### A category where forecasting the mean fails
+
+.center[
+![](ColesPresentation_files/figure-html/unnamed-chunk-10-1.png)&lt;!-- --&gt;
+]
+
+---
+
+class: center, inverse, middle
+
+# Results
+
+---
+
+## Models were all compared by Total Profit
+
+#### Profit on Previously Seen Items
+$${\$}5,444,738$$
+
+#### Profit on New Items
+$${\$}849,074$$
+
+#### Total Profit for October 2015
+$${\$}6,293,812$$
+
+#### Kaggle Score - November 2015 (RMSE)
+`$$1.36$$`
+
+
+---
+
+### Things that worked well
+
+#### Data
+
+- Grouping data by stores to get more observations
+
+- Ungrouping by each stores sales totals for per-shop forecasts
+
+--
+
+#### For optimisation
+
+- Quadratics on forecast loss function
+
+- Gradient Descent algorithms &lt; 2 milliseconds / model
+
+--
+
+#### In the model
+
+- Uses different models for different amounts of data
+
+- Intercept and Linear Time trends for low observation models
+
+- Previous Month Sales, Price of Prodcut, Price of items in same category
+
+- Using different approaches for games and tickets
+
+---
+
+### Things that didn't work well
+
+#### In the models
+
+- Previous Year Sales (Despite seasonality in total sales)
+
+- Number of sales of items in same category
+
+- Too many terms in low-sales products
+
+- Using lagged sales instead of time trends
+
+- Increasing the length of no sales before forecasting zero sales
+
+- Forecasting every product with category models
+
+- Linear models
+
+--
+
+#### For Cost Optimisation
+
+- Cost optimisation for category models
+
+- Lack of data on price elasticity 
+
+- Averaging prices for periods with no sales
+
+---
+
+### Things that could be improved
+
+#### Independent models estimated without much data
+
+- Need more data to learn patterns for forecasting
+
+- More powerful approaches using the entire dataset: Hierarchical Models, Clustering, Neural Networks etc.
+
+--
+
+#### Price elasticity not estimated very well
+
+- Learn from price responses in similar items
+
+- Model cross-price elasticities
+
+--
+
+#### Some products had unusual behaviour:
+
+- Look at products (or categoeries) and apply domain knowledge
+
+--
+
+#### Just for forecasting
+
+- Use models without price optimisation constraints.
+    </textarea>
+<style data-target="print-only">@media screen {.remark-slide-container{display:block;}.remark-slide-scaler{box-shadow:none;}}</style>
+<script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
+<script>var slideshow = remark.create({
+"highlightStyle": "github",
+"highlightLines": true,
+"countIncrementalSlides": false
+});
+if (window.HTMLWidgets) slideshow.on('afterShowSlide', function (slide) {
+  window.dispatchEvent(new Event('resize'));
+});
+(function(d) {
+  var s = d.createElement("style"), r = d.querySelector(".remark-slide-scaler");
+  if (!r) return;
+  s.type = "text/css"; s.innerHTML = "@page {size: " + r.style.width + " " + r.style.height +"; }";
+  d.head.appendChild(s);
+})(document);
+
+(function(d) {
+  var el = d.getElementsByClassName("remark-slides-area");
+  if (!el) return;
+  var slide, slides = slideshow.getSlides(), els = el[0].children;
+  for (var i = 1; i < slides.length; i++) {
+    slide = slides[i];
+    if (slide.properties.continued === "true" || slide.properties.count === "false") {
+      els[i - 1].className += ' has-continuation';
+    }
+  }
+  var s = d.createElement("style");
+  s.type = "text/css"; s.innerHTML = "@media print { .has-continuation { display: none; } }";
+  d.head.appendChild(s);
+})(document);
+// delete the temporary CSS (for displaying all slides initially) when the user
+// starts to view slides
+(function() {
+  var deleted = false;
+  slideshow.on('beforeShowSlide', function(slide) {
+    if (deleted) return;
+    var sheets = document.styleSheets, node;
+    for (var i = 0; i < sheets.length; i++) {
+      node = sheets[i].ownerNode;
+      if (node.dataset["target"] !== "print-only") continue;
+      node.parentNode.removeChild(node);
+    }
+    deleted = true;
+  });
+})();</script>
+
+<script>
+(function() {
+  var links = document.getElementsByTagName('a');
+  for (var i = 0; i < links.length; i++) {
+    if (/^(https?:)?\/\//.test(links[i].getAttribute('href'))) {
+      links[i].target = '_blank';
+    }
+  }
+})();
+</script>
+
+<script>
+slideshow._releaseMath = function(el) {
+  var i, text, code, codes = el.getElementsByTagName('code');
+  for (i = 0; i < codes.length;) {
+    code = codes[i];
+    if (code.parentNode.tagName !== 'PRE' && code.childElementCount === 0) {
+      text = code.textContent;
+      if (/^\\\((.|\s)+\\\)$/.test(text) || /^\\\[(.|\s)+\\\]$/.test(text) ||
+          /^\$\$(.|\s)+\$\$$/.test(text) ||
+          /^\\begin\{([^}]+)\}(.|\s)+\\end\{[^}]+\}$/.test(text)) {
+        code.outerHTML = code.innerHTML;  // remove <code></code>
+        continue;
+      }
+    }
+    i++;
+  }
+};
+slideshow._releaseMath(document);
+</script>
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+(function () {
+  var script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src  = 'https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-MML-AM_CHTML';
+  if (location.protocol !== 'file:' && /^https?:/.test(script.src))
+    script.src  = script.src.replace(/^https?:/, '');
+  document.getElementsByTagName('head')[0].appendChild(script);
+})();
+</script>
+  </body>
+</html>
